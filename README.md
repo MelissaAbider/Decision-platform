@@ -46,6 +46,7 @@ sync_project_dependencies
 -> silver_to_gold
 -> validate_gold_gx
 -> load_postgres
+run_dbt_models
 ```
 
 ## Data layers
@@ -83,6 +84,7 @@ It combines electricity consumption, weather and calendar features into one tabl
 | Lakehouse storage | Delta Lake |
 | Data quality | Great Expectations |
 | Serving database | PostgreSQL |
+| SQL modeling | dbt |
 | Orchestration | Apache Airflow |
 | Local infrastructure | Docker Compose |
 | Quality checks | Ruff, Pytest, pre-commit |
@@ -163,6 +165,29 @@ Check the PostgreSQL table:
 docker compose exec -T postgres psql -U adp -d adp < sql/check_energy_features_hourly.sql
 ```
 
+## Run dbt manually
+
+After PostgreSQL has been loaded, run dbt models and tests:
+
+```bash
+uv run --frozen --extra analytics dbt run --project-dir dbt --profiles-dir dbt
+uv run --frozen --extra analytics dbt test --project-dir dbt --profiles-dir dbt
+```
+
+dbt reads the PostgreSQL source table:
+
+```text
+public.energy_features_hourly_postgres
+```
+
+and creates the analytics marts:
+
+```text
+analytics.mart_energy_hourly
+analytics.mart_energy_daily
+analytics.mart_energy_peak_analysis
+```
+
 ## Run the full pipeline with Airflow
 
 Build and start the local Airflow stack:
@@ -187,10 +212,13 @@ Trigger the DAG:
 docker compose exec airflow-webserver airflow dags trigger energy_batch_pipeline
 ```
 
-A successful run produces the Gold Delta table and loads the final result into PostgreSQL table:
+A successful run produces the Gold Delta table, loads it into PostgreSQL, then builds and tests the dbt mart:
 
 ```text
 public.energy_features_hourly_postgres
+analytics.mart_energy_hourly
+analytics.mart_energy_daily
+analytics.mart_energy_peak_analysis
 ```
 
 ## Validation status
@@ -204,6 +232,7 @@ validate_silver
 silver_to_gold
 validate_gold_gx
 load_postgres
+run_dbt_models
 ```
 
 Local checks run before publication:
@@ -217,9 +246,9 @@ pytest: 17 passed
 
 Planned extensions:
 
-- add dbt models on top of PostgreSQL
 - add streaming ingestion with Kafka
 - add ML training and experiment tracking with MLflow
 - expose predictions through an API
 - build a dashboard for business users
 - add monitoring and alerting
+

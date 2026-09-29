@@ -10,6 +10,7 @@ from airflow import DAG
 PROJECT_DIR = "/opt/airflow/project"
 DATA_ROOT = "/opt/airflow/data"
 PYTHON_BIN = "/opt/airflow/.venvs/ia-decision-platform/bin/python"
+DBT_BIN = "/opt/airflow/.venvs/ia-decision-platform/bin/dbt"
 COMMON_ENV = {
     "ADP_DATA_DIR": "data",
     "ADP_POSTGRES_URL": "postgresql+psycopg://adp:adp@postgres:5432/adp",
@@ -19,6 +20,12 @@ COMMON_ENV = {
     "UV_PROJECT_ENVIRONMENT": "/opt/airflow/.venvs/ia-decision-platform",
     "UV_LINK_MODE": "copy",
     "SPARK_LOCAL_DIRS": "/tmp/ai-decision-platform-spark",
+    "DBT_POSTGRES_HOST": "postgres",
+    "DBT_POSTGRES_PORT": "5432",
+    "DBT_POSTGRES_USER": "adp",
+    "DBT_POSTGRES_PASSWORD": "adp",
+    "DBT_POSTGRES_DB": "adp",
+    "DBT_POSTGRES_SCHEMA": "analytics",
 }
 
 
@@ -28,7 +35,7 @@ def project_command(command: str) -> str:
 
 with DAG(
     dag_id="energy_batch_pipeline",
-    description="Orchestration Bronze -> Silver -> Gold -> PostgreSQL",
+    description="Orchestration Bronze -> Silver -> Gold -> PostgreSQL -> dbt",
     start_date=pendulum.datetime(2024, 1, 1, tz="UTC"),
     schedule=None,
     catchup=False,
@@ -39,7 +46,7 @@ with DAG(
         task_id="sync_project_dependencies",
         bash_command=project_command(
             f"{PYTHON_BIN} -c "
-            "'import pyspark, delta, great_expectations, pandas, sqlalchemy, psycopg; "
+            "'import pyspark, delta, great_expectations, pandas, sqlalchemy, psycopg, dbt; "
             'print("Dependencies ready")\''
         ),
         env=COMMON_ENV,
@@ -92,6 +99,15 @@ with DAG(
         env=COMMON_ENV,
     )
 
+    run_dbt = BashOperator(
+        task_id="run_dbt_models",
+        bash_command=project_command(
+            f"{DBT_BIN} run --project-dir dbt --profiles-dir dbt && "
+            f"{DBT_BIN} test --project-dir dbt --profiles-dir dbt"
+        ),
+        env=COMMON_ENV,
+    )
+
     (
         sync_project
         >> bronze_to_silver
@@ -99,4 +115,5 @@ with DAG(
         >> silver_to_gold
         >> validate_gold
         >> load_postgres
+        >> run_dbt
     )

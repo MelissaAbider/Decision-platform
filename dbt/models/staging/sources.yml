@@ -1,0 +1,27 @@
+version: 2
+
+sources:
+  - name: serving
+    description: Tables loaded into PostgreSQL from the Gold Delta layer.
+    schema: public
+    tables:
+      - name: energy_features_hourly_postgres
+        description: Hourly energy feature table loaded from the Gold Delta layer.
+        columns:
+          - name: timestamp_utc
+            description: Hourly timestamp in UTC.
+            tests:
+              - not_null
+              - unique
+          - name: date_utc
+            description: UTC calendar date derived from timestamp_utc.
+            tests:
+              - not_null
+          - name: consumption_mw
+            description: Electricity consumption in MW.
+            tests:
+              - not_null
+          - name: temperature_c
+            description: Hourly temperature in Celsius.
+            tests:
+              - not_null

@@ -17,5 +17,7 @@ RUN python -m pip install --no-cache-dir uv psycopg2-binary
 WORKDIR /opt/airflow/project
 COPY --chown=airflow:0 pyproject.toml uv.lock README.md ./
 COPY --chown=airflow:0 src ./src
+COPY --chown=airflow:0 dbt ./dbt
 
-RUN uv sync --frozen --extra spark --extra quality --extra serving
+RUN uv sync --frozen --extra spark --extra quality --extra serving --extra analytics
+

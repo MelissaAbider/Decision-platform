@@ -1,0 +1,78 @@
+version: 2
+
+models:
+  - name: mart_energy_hourly
+    description: Business-ready hourly energy table for analytics, dashboards and future data science work.
+    columns:
+      - name: timestamp_utc
+        description: Unique hourly timestamp in UTC.
+        tests:
+          - not_null
+          - unique
+      - name: date_utc
+        description: UTC date associated with the hourly timestamp.
+        tests:
+          - not_null
+      - name: consumption_mw
+        description: Electricity consumption in MW.
+        tests:
+          - not_null
+      - name: temperature_c
+        description: Hourly temperature in Celsius.
+        tests:
+          - not_null
+      - name: demand_period
+        description: Business bucket derived from the hour of day.
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['morning_peak', 'evening_peak', 'night', 'standard']
+
+  - name: mart_energy_daily
+    description: Daily energy summary used by dashboards and business reporting.
+    columns:
+      - name: date_utc
+        description: Unique UTC day.
+        tests:
+          - not_null
+          - unique
+      - name: hourly_observation_count
+        description: Number of hourly records available for the day.
+        tests:
+          - not_null
+      - name: avg_consumption_mw
+        description: Average daily electricity consumption in MW.
+        tests:
+          - not_null
+      - name: peak_consumption_mw
+        description: Highest hourly electricity consumption observed during the day.
+        tests:
+          - not_null
+
+  - name: mart_energy_peak_analysis
+    description: Daily consumption summary by demand period for peak-hour analysis.
+    columns:
+      - name: date_utc
+        description: UTC day.
+        tests:
+          - not_null
+      - name: demand_period
+        description: Demand period bucket.
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['morning_peak', 'evening_peak', 'night', 'standard']
+      - name: hourly_observation_count
+        description: Number of hourly records in the demand period.
+        tests:
+          - not_null
+      - name: avg_consumption_mw
+        description: Average electricity consumption for the demand period.
+        tests:
+          - not_null
+      - name: peak_consumption_mw
+        description: Peak electricity consumption for the demand period.
+        tests:
+          - not_null

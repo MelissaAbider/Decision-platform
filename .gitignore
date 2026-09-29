@@ -23,6 +23,12 @@ airflow/logs/
 docs/
 README_AI_DECISION_PLATFORM_FINAL.md
 
+# dbt generated artifacts
+dbt/target/
+dbt/dbt_packages/
+dbt/logs/
+dbt/.user.yml
+
 # Tool caches
 .pytest_cache/
 .ruff_cache/
@@ -45,3 +51,5 @@ htmlcov/
 Thumbs.db
 .vscode/
 .idea/
+
+
