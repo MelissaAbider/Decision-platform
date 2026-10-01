@@ -19,5 +19,4 @@ COPY --chown=airflow:0 pyproject.toml uv.lock README.md ./
 COPY --chown=airflow:0 src ./src
 COPY --chown=airflow:0 dbt ./dbt
 
-RUN uv sync --frozen --extra spark --extra quality --extra serving --extra analytics
-
+RUN uv sync --frozen --extra spark --extra quality --extra serving --extra analytics --extra streaming

@@ -14,6 +14,7 @@ The project is designed to practice the core tools and patterns used in modern d
 - Delta Lake tables and partitioned storage
 - Data quality checks with Great Expectations
 - PostgreSQL as a serving database
+- Kafka near real-time weather ingestion
 - Apache Airflow orchestration
 - Docker-based local services
 - Automated Python quality checks
@@ -85,6 +86,7 @@ It combines electricity consumption, weather and calendar features into one tabl
 | Data quality | Great Expectations |
 | Serving database | PostgreSQL |
 | SQL modeling | dbt |
+| Streaming | Kafka, Open-Meteo live weather API |
 | Orchestration | Apache Airflow |
 | Local infrastructure | Docker Compose |
 | Quality checks | Ruff, Pytest, pre-commit |
@@ -188,6 +190,40 @@ analytics.mart_energy_daily
 analytics.mart_energy_peak_analysis
 ```
 
+## Run Kafka weather streaming manually
+
+Start Kafka and PostgreSQL:
+
+```bash
+docker compose up -d postgres kafka
+```
+
+Publish live weather events from Open-Meteo to Kafka:
+
+```bash
+uv run --frozen --extra streaming python -m ai_decision_platform.streaming.weather_producer \
+  --topic weather.current \
+  --bootstrap-servers localhost:29092 \
+  --interval-seconds 10 \
+  --max-events 5
+```
+
+Consume Kafka events into PostgreSQL:
+
+```bash
+uv run --frozen --extra streaming python -m ai_decision_platform.streaming.weather_consumer \
+  --topic weather.current \
+  --bootstrap-servers localhost:29092 \
+  --database-url postgresql://adp:adp@localhost:5432/adp \
+  --max-messages 5
+```
+
+Check the ingested weather stream:
+
+```bash
+docker compose exec -T postgres psql -U adp -d adp < sql/check_weather_stream.sql
+```
+
 ## Run the full pipeline with Airflow
 
 Build and start the local Airflow stack:
@@ -246,7 +282,6 @@ pytest: 17 passed
 
 Planned extensions:
 
-- add streaming ingestion with Kafka
 - add ML training and experiment tracking with MLflow
 - expose predictions through an API
 - build a dashboard for business users

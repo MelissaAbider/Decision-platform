@@ -23,6 +23,7 @@ serving = [
     "sqlalchemy>=2,<3",
 ]
 analytics = ["dbt-postgres>=1.9,<2"]
+streaming = ["kafka-python-ng>=2.2,<3", "psycopg[binary]>=3,<4"]
 
 [project.scripts]
 ai-decision-platform = "ai_decision_platform.__main__:main"
@@ -37,8 +38,10 @@ line-length = 100
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP"]
 
+[tool.ruff.lint.isort]
+known-third-party = ["kafka", "psycopg"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra"
-
 
