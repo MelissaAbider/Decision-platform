@@ -83,11 +83,19 @@ def test_empty_source_rejected():
         energy_for_day(DAY, lambda _: {"total_count": 0, "results": []})
 
 
-def test_duplicate_timestamps_rejected():
+def test_identical_duplicate_timestamps_are_deduplicated():
     payload = fake_fetch("rte")
     payload["results"] *= 2
     payload["total_count"] = 2
-    with pytest.raises(ValueError, match="dupliqués"):
+    frame, _, _ = energy_for_day(DAY, lambda _: payload)
+    assert frame.height == 1
+
+
+def test_conflicting_duplicate_timestamps_rejected():
+    payload = fake_fetch("rte")
+    payload["results"].append({"date_heure": "2024-01-01T00:00:00+00:00", "consommation": 51000})
+    payload["total_count"] = 2
+    with pytest.raises(ValueError, match="valeurs différentes"):
         energy_for_day(DAY, lambda _: payload)
 
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from datetime import date
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -40,9 +41,7 @@ REQUIRED_COLUMNS = [
     "is_public_holiday",
 ]
 DERIVED_DATE_COLUMN = "timestamp_date_utc"
-EXPECTED_START_DATE = "2024-01-01"
-EXPECTED_END_DATE = "2024-01-07"
-EXPECTED_ROWS = 168
+DERIVED_HOUR_COLUMN = "timestamp_hour_utc"
 
 
 def read_gold_as_pandas(spark: SparkSession, gold_dir: Path) -> pd.DataFrame:
@@ -52,35 +51,48 @@ def read_gold_as_pandas(spark: SparkSession, gold_dir: Path) -> pd.DataFrame:
     pandas_frame[DERIVED_DATE_COLUMN] = pd.to_datetime(pandas_frame["timestamp_utc"]).dt.strftime(
         "%Y-%m-%d"
     )
+    pandas_frame[DERIVED_HOUR_COLUMN] = pd.to_datetime(pandas_frame["timestamp_utc"]).dt.floor("h")
     return pandas_frame
 
 
-def build_gold_suite(context: EphemeralDataContext) -> ExpectationSuite:
+def build_gold_suite(
+    context: EphemeralDataContext, expected_start: str, expected_end: str
+) -> ExpectationSuite:
+    days = (date.fromisoformat(expected_end) - date.fromisoformat(expected_start)).days + 1
+    if days < 1:
+        raise ValueError("Periode attendue invalide")
     suite = context.suites.add(gx.ExpectationSuite(name="gold_energy_features_hourly"))
 
     suite.add_expectation(
         ExpectTableColumnsToMatchSet(column_set=REQUIRED_COLUMNS, exact_match=False)
     )
-    suite.add_expectation(ExpectTableRowCountToEqual(value=EXPECTED_ROWS))
+    suite.add_expectation(ExpectTableRowCountToEqual(value=days * 24))
     suite.add_expectation(ExpectColumnValuesToBeUnique(column="timestamp_utc"))
     suite.add_expectation(
         ExpectColumnMinToBeBetween(
             column="date_utc",
-            min_value=EXPECTED_START_DATE,
-            max_value=EXPECTED_START_DATE,
+            min_value=expected_start,
+            max_value=expected_start,
         )
     )
     suite.add_expectation(
         ExpectColumnMaxToBeBetween(
             column="date_utc",
-            min_value=EXPECTED_END_DATE,
-            max_value=EXPECTED_END_DATE,
+            min_value=expected_end,
+            max_value=expected_end,
         )
     )
     suite.add_expectation(
         ExpectColumnPairValuesToBeEqual(
             column_A="date_utc",
             column_B=DERIVED_DATE_COLUMN,
+            ignore_row_if="either_value_is_missing",
+        )
+    )
+    suite.add_expectation(
+        ExpectColumnPairValuesToBeEqual(
+            column_A="timestamp_utc",
+            column_B=DERIVED_HOUR_COLUMN,
             ignore_row_if="either_value_is_missing",
         )
     )
@@ -106,9 +118,12 @@ def build_gold_suite(context: EphemeralDataContext) -> ExpectationSuite:
     return suite
 
 
-def validate_gold_with_gx(gold_dir: Path) -> bool:
+def validate_gold_with_gx(
+    gold_dir: Path, expected_start: str | None = None, expected_end: str | None = None
+) -> bool:
+    if (expected_start is None) != (expected_end is None):
+        raise ValueError("Fournir ensemble --expected-start et --expected-end")
     context = gx.get_context(mode="ephemeral")
-    suite = build_gold_suite(context)
     datasource = context.data_sources.add_pandas(name="pandas_runtime")
     asset = datasource.add_dataframe_asset(name=GOLD_TABLE)
     batch_definition = asset.add_batch_definition_whole_dataframe("gold_batch")
@@ -119,6 +134,16 @@ def validate_gold_with_gx(gold_dir: Path) -> bool:
         pandas_frame = read_gold_as_pandas(spark, gold_dir)
     finally:
         spark.stop()
+
+    if pandas_frame.empty:
+        raise ValueError("Table Gold vide")
+    if expected_start is None:
+        expected_start = pandas_frame["date_utc"].min()
+        expected_end = pandas_frame["date_utc"].max()
+    suite = build_gold_suite(context, expected_start, expected_end)
+    pandas_frame = pandas_frame.loc[
+        pandas_frame["date_utc"].between(expected_start, expected_end)
+    ].copy()
 
     batch = batch_definition.get_batch(batch_parameters={"dataframe": pandas_frame})
     result = batch.validate(suite)
@@ -144,9 +169,15 @@ def main() -> None:
         default=Path.home() / "ia-decision-platform-data" / "gold",
         help="Dossier contenant les tables Gold Delta",
     )
+    parser.add_argument("--expected-start", type=date.fromisoformat)
+    parser.add_argument("--expected-end", type=date.fromisoformat)
     args = parser.parse_args()
 
-    success = validate_gold_with_gx(args.gold_dir)
+    success = validate_gold_with_gx(
+        args.gold_dir,
+        str(args.expected_start) if args.expected_start else None,
+        str(args.expected_end) if args.expected_end else None,
+    )
     if not success:
         raise SystemExit(1)
 

@@ -76,16 +76,17 @@ def energy_for_day(day: date, fetch=fetch_json) -> tuple[pl.DataFrame, list, lis
     required = {"date_heure", "consommation"}
     if not required.issubset(frame.columns):
         raise ValueError("RTE : colonnes obligatoires absentes")
-    timestamps = frame["date_heure"].to_list()
+    unique_measurements = frame.unique(subset=["date_heure", "consommation"], keep="first")
+    timestamps = unique_measurements["date_heure"].to_list()
     if len(set(timestamps)) != len(timestamps):
-        raise ValueError("RTE : timestamps dupliqués")
+        raise ValueError("RTE : timestamps dupliqués avec valeurs différentes")
     for stamp in timestamps:
         parsed = datetime.fromisoformat(stamp)
         if parsed.tzinfo is None or parsed.astimezone(UTC).date() != day:
             raise ValueError("RTE : timestamp hors de la journée UTC")
     if len(rows) != total:
         raise ValueError("RTE : nombre de lignes incohérent")
-    return frame, pages, urls
+    return unique_measurements, pages, urls
 
 
 def weather_for_day(day: date, latitude: float, longitude: float, fetch=fetch_json):

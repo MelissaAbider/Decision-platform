@@ -49,13 +49,30 @@ def build_energy_features_hourly(
     weather_hourly: DataFrame,
     calendar_daily: DataFrame,
 ) -> DataFrame:
+    from pyspark.sql import Window
     from pyspark.sql import functions as F
 
     consumption_hourly = hourly_consumption_features(rte_consumption)
     weather_features = hourly_weather_features(weather_hourly)
+    ordered_hours = Window.orderBy("timestamp_utc")
+    previous_value = F.last("consumption_mw", ignorenulls=True).over(
+        ordered_hours.rowsBetween(Window.unboundedPreceding, 0)
+    )
+    next_value = F.first("consumption_mw", ignorenulls=True).over(
+        ordered_hours.rowsBetween(0, Window.unboundedFollowing)
+    )
 
     joined = (
-        consumption_hourly.join(weather_features, on="timestamp_utc", how="inner")
+        weather_features.join(consumption_hourly, on="timestamp_utc", how="left")
+        .withColumn(
+            "consumption_mw",
+            F.coalesce(
+                "consumption_mw",
+                (previous_value + next_value) / 2,
+                previous_value,
+                next_value,
+            ),
+        )
         .withColumn("date_utc", F.to_date("timestamp_utc"))
         .join(calendar_daily, F.col("date_utc") == F.col("date"), how="inner")
     )

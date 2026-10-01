@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -104,13 +105,74 @@ def check_date_range(
     )
 
 
-def validate_silver(silver_dir: Path) -> list[CheckResult]:
+def check_complete_dates(
+    frame: DataFrame, table_name: str, column: str, start: str, end: str
+) -> CheckResult:
+    expected = (date.fromisoformat(end) - date.fromisoformat(start)).days + 1
+    actual = frame.select(column).distinct().count()
+    return CheckResult(
+        name=f"{table_name}: toutes les dates presentes",
+        passed=actual == expected,
+        details=f"{actual} date(s), {expected} attendue(s)",
+    )
+
+
+def check_energy_observed_hourly_coverage(frame: DataFrame, start: str, end: str) -> CheckResult:
+    """Contrat utile au Gold : chaque heure doit avoir au moins une mesure observee."""
+    from pyspark.sql import functions as F
+
+    invalid = frame.filter(
+        (F.minute("timestamp_utc") % 15 != 0) | (F.second("timestamp_utc") != 0)
+    ).count()
+    expected_hours = ((date.fromisoformat(end) - date.fromisoformat(start)).days + 1) * 24
+    allowed_missing_hours = 2
+    observed_hours = (
+        frame.filter(F.col("measurement_status") == "observed")
+        .select(F.date_trunc("hour", "timestamp_utc").alias("hour_utc"))
+        .distinct()
+        .count()
+    )
+    missing_hours = expected_hours - observed_hours
+    return CheckResult(
+        name="silver.rte_consumption: couverture horaire observee",
+        passed=0 <= missing_hours <= allowed_missing_hours and invalid == 0,
+        details=(
+            f"{observed_hours}/{expected_hours} heure(s) observee(s), "
+            f"{missing_hours} manquante(s), {invalid} hors grille"
+        ),
+    )
+
+
+def validate_silver(
+    silver_dir: Path, expected_start: str | None = None, expected_end: str | None = None
+) -> list[CheckResult]:
+    from pyspark.sql import functions as F
+
     from ai_decision_platform.processing.bronze_to_silver import build_spark
+
+    if (expected_start is None) != (expected_end is None):
+        raise ValueError("Fournir ensemble --expected-start et --expected-end")
+    if expected_start and date.fromisoformat(expected_end) < date.fromisoformat(expected_start):
+        raise ValueError("Periode attendue invalide")
 
     spark = build_spark("ADP-Validate-Silver")
     try:
         spark.sparkContext.setLogLevel("WARN")
         rte, weather, calendar = read_silver_tables(spark, silver_dir)
+
+        if expected_start is None:
+            bounds = calendar.select(
+                F.min("date").cast("string").alias("start"),
+                F.max("date").cast("string").alias("end"),
+            ).collect()[0]
+            expected_start, expected_end = bounds["start"], bounds["end"]
+            if expected_start is None:
+                raise ValueError("Calendrier Silver vide")
+
+        # La periode demandee peut etre incluse dans un historique Silver plus grand.
+        rte = rte.filter(F.col("date_utc").between(expected_start, expected_end))
+        weather = weather.filter(F.col("date_utc").between(expected_start, expected_end))
+        calendar = calendar.filter(F.col("date").between(expected_start, expected_end))
 
         return [
             check_min_rows(rte, "silver.rte_consumption", 1),
@@ -123,12 +185,16 @@ def validate_silver(silver_dir: Path) -> list[CheckResult]:
                 "measurement_status",
                 {"observed", "missing_measurement"},
             ),
+            check_energy_observed_hourly_coverage(rte, expected_start, expected_end),
             check_date_range(
                 rte,
                 "silver.rte_consumption",
                 "date_utc",
-                "2024-01-01",
-                "2024-01-07",
+                expected_start,
+                expected_end,
+            ),
+            check_complete_dates(
+                rte, "silver.rte_consumption", "date_utc", expected_start, expected_end
             ),
             check_min_rows(weather, "silver.weather_hourly", 1),
             check_no_duplicate_key(
@@ -142,8 +208,11 @@ def validate_silver(silver_dir: Path) -> list[CheckResult]:
                 weather,
                 "silver.weather_hourly",
                 "date_utc",
-                "2024-01-01",
-                "2024-01-07",
+                expected_start,
+                expected_end,
+            ),
+            check_complete_dates(
+                weather, "silver.weather_hourly", "date_utc", expected_start, expected_end
             ),
             check_min_rows(calendar, "silver.calendar_daily", 1),
             check_no_duplicate_key(calendar, "silver.calendar_daily", ["date"]),
@@ -152,8 +221,11 @@ def validate_silver(silver_dir: Path) -> list[CheckResult]:
                 calendar,
                 "silver.calendar_daily",
                 "date",
-                "2024-01-01",
-                "2024-01-07",
+                expected_start,
+                expected_end,
+            ),
+            check_complete_dates(
+                calendar, "silver.calendar_daily", "date", expected_start, expected_end
             ),
         ]
     finally:
@@ -174,9 +246,15 @@ def main() -> None:
         default=Path.home() / "ia-decision-platform-data" / "silver",
         help="Dossier contenant les tables Silver Delta",
     )
+    parser.add_argument("--expected-start", type=date.fromisoformat)
+    parser.add_argument("--expected-end", type=date.fromisoformat)
     args = parser.parse_args()
 
-    results = validate_silver(args.silver_dir)
+    results = validate_silver(
+        args.silver_dir,
+        str(args.expected_start) if args.expected_start else None,
+        str(args.expected_end) if args.expected_end else None,
+    )
     print_results(results)
 
     if not all(result.passed for result in results):

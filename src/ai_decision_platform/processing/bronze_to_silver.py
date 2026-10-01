@@ -2,11 +2,14 @@
 
 import argparse
 import json
+import os
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from tempfile import gettempdir
 
 from delta import configure_spark_with_delta_pip
+from delta.tables import DeltaTable
 from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import functions as F
 
@@ -34,8 +37,23 @@ def latest_successful_bronze_run(data_dir: Path) -> Path:
     raise FileNotFoundError(f"Aucun run Bronze success sous {runs_dir}")
 
 
+def successful_bronze_runs(data_dir: Path) -> list[Path]:
+    """Rejouer du plus ancien au plus recent : les corrections recentes gagnent."""
+    runs = []
+    for run_dir in sorted((data_dir / "bronze" / "runs").glob("*")):
+        manifest_path = run_dir / "manifest.json"
+        if manifest_path.exists():
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            if manifest.get("status") == "success":
+                runs.append(run_dir)
+    if not runs:
+        raise FileNotFoundError(f"Aucun run Bronze success sous {data_dir / 'bronze' / 'runs'}")
+    return runs
+
+
 def build_spark(app_name: str = "ADP-Bronze-To-Silver") -> SparkSession:
     """Cree une session Spark locale avec Delta Lake active."""
+    os.environ["PYSPARK_PYTHON"] = sys.executable
     runtime_dir = Path(gettempdir()) / "ai-decision-platform-spark"
     runtime_dir.mkdir(parents=True, exist_ok=True)
 
@@ -48,6 +66,7 @@ def build_spark(app_name: str = "ADP-Bronze-To-Silver") -> SparkSession:
             "org.apache.spark.sql.delta.catalog.DeltaCatalog",
         )
         .config("spark.sql.session.timeZone", "UTC")
+        .config("spark.pyspark.python", sys.executable)
         .config("spark.driver.host", "127.0.0.1")
         .config("spark.driver.bindAddress", "127.0.0.1")
         .config("spark.local.dir", str(runtime_dir / "local"))
@@ -122,13 +141,35 @@ def write_delta(frame: DataFrame, path: Path, partition_by: str) -> None:
     )
 
 
+def merge_delta(frame: DataFrame, path: Path, partition_by: str, keys: list[str]) -> None:
+    """Creer une table si absente ; sinon inserer ou mettre a jour par cle metier."""
+    if not DeltaTable.isDeltaTable(frame.sparkSession, str(path)):
+        frame.write.format("delta").mode("errorifexists").partitionBy(partition_by).save(str(path))
+        return
+    condition = " AND ".join(f"target.{key} = source.{key}" for key in keys)
+    (
+        DeltaTable.forPath(frame.sparkSession, str(path))
+        .alias("target")
+        .merge(frame.alias("source"), condition)
+        .whenMatchedUpdateAll()
+        .whenNotMatchedInsertAll()
+        .execute()
+    )
+
+
 def transform_bronze_to_silver(
     data_dir: Path,
     run_dir: Path | None = None,
     silver_dir: Path | None = None,
+    all_runs: bool = False,
 ) -> SilverTables:
-    selected_run = run_dir or latest_successful_bronze_run(data_dir)
-    run_id = selected_run.name
+    if all_runs and run_dir is not None:
+        raise ValueError("Choisir --all-runs ou --run-dir, pas les deux")
+    selected_runs = (
+        successful_bronze_runs(data_dir)
+        if all_runs
+        else [run_dir or latest_successful_bronze_run(data_dir)]
+    )
     silver_dir = silver_dir or data_dir / "silver"
     tables = SilverTables(
         rte_consumption=silver_dir / "rte_consumption",
@@ -138,22 +179,30 @@ def transform_bronze_to_silver(
     spark = build_spark()
     try:
         spark.sparkContext.setLogLevel("WARN")
-        print(f"Run Bronze utilise: {selected_run}")
-        write_delta(
-            clean_rte_consumption(read_bronze_source(spark, selected_run, "rte"), run_id),
-            tables.rte_consumption,
-            "date_utc",
-        )
-        write_delta(
-            clean_weather_hourly(read_bronze_source(spark, selected_run, "weather"), run_id),
-            tables.weather_hourly,
-            "date_utc",
-        )
-        write_delta(
-            clean_calendar_daily(read_bronze_source(spark, selected_run, "calendar"), run_id),
-            tables.calendar_daily,
-            "date",
-        )
+        for selected_run in selected_runs:
+            manifest = json.loads((selected_run / "manifest.json").read_text(encoding="utf-8"))
+            if manifest.get("status") != "success":
+                raise ValueError(f"Run Bronze non reussi : {selected_run}")
+            run_id = selected_run.name
+            print(f"Run Bronze utilise: {selected_run}", flush=True)
+            merge_delta(
+                clean_rte_consumption(read_bronze_source(spark, selected_run, "rte"), run_id),
+                tables.rte_consumption,
+                "date_utc",
+                ["timestamp_utc"],
+            )
+            merge_delta(
+                clean_weather_hourly(read_bronze_source(spark, selected_run, "weather"), run_id),
+                tables.weather_hourly,
+                "date_utc",
+                ["timestamp_utc", "requested_latitude", "requested_longitude"],
+            )
+            merge_delta(
+                clean_calendar_daily(read_bronze_source(spark, selected_run, "calendar"), run_id),
+                tables.calendar_daily,
+                "date",
+                ["date"],
+            )
     finally:
         spark.stop()
     return tables
@@ -163,12 +212,17 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Transforme Bronze Parquet en Silver Delta")
     parser.add_argument("--run-dir", type=Path, help="Run Bronze precis a transformer")
     parser.add_argument(
+        "--all-runs", action="store_true", help="Integrer tous les runs Bronze reussis"
+    )
+    parser.add_argument(
         "--silver-dir",
         type=Path,
         help="Dossier de sortie Silver. Utile sous WSL pour ecrire Delta hors /mnt/c.",
     )
     args = parser.parse_args()
-    tables = transform_bronze_to_silver(load_settings().data_dir, args.run_dir, args.silver_dir)
+    tables = transform_bronze_to_silver(
+        load_settings().data_dir, args.run_dir, args.silver_dir, args.all_runs
+    )
     print("Silver RTE:", tables.rte_consumption)
     print("Silver meteo:", tables.weather_hourly)
     print("Silver calendrier:", tables.calendar_daily)

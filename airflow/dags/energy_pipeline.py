@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pendulum
+from airflow.models.param import Param
 from airflow.operators.bash import BashOperator
 
 from airflow import DAG
@@ -26,6 +27,8 @@ COMMON_ENV = {
     "DBT_POSTGRES_PASSWORD": "adp",
     "DBT_POSTGRES_DB": "adp",
     "DBT_POSTGRES_SCHEMA": "analytics",
+    "BACKFILL_START": "{{ params.start_date }}",
+    "BACKFILL_END": "{{ params.end_date }}",
 }
 
 
@@ -35,10 +38,15 @@ def project_command(command: str) -> str:
 
 with DAG(
     dag_id="energy_batch_pipeline",
-    description="Orchestration Bronze -> Silver -> Gold -> PostgreSQL -> dbt",
+    description="Ingestion historique -> Bronze -> Silver -> Gold -> PostgreSQL -> dbt",
     start_date=pendulum.datetime(2024, 1, 1, tz="UTC"),
     schedule=None,
     catchup=False,
+    max_active_runs=1,
+    params={
+        "start_date": Param("2024-01-01", type="string", format="date"),
+        "end_date": Param("2024-01-07", type="string", format="date"),
+    },
     default_args={"retries": 1},
     tags=["ai-decision-platform", "data-engineering"],
 ) as dag:
@@ -52,11 +60,20 @@ with DAG(
         env=COMMON_ENV,
     )
 
+    ingest_history = BashOperator(
+        task_id="ingest_history",
+        bash_command=project_command(
+            f"{PYTHON_BIN} -m ai_decision_platform.ingestion.backfill "
+            '--start "$BACKFILL_START" --end "$BACKFILL_END"'
+        ),
+        env=COMMON_ENV,
+    )
+
     bronze_to_silver = BashOperator(
         task_id="bronze_to_silver",
         bash_command=project_command(
             f"{PYTHON_BIN} -m ai_decision_platform.processing.bronze_to_silver "
-            f"--silver-dir {DATA_ROOT}/silver"
+            f"--silver-dir {DATA_ROOT}/silver --all-runs"
         ),
         env=COMMON_ENV,
     )
@@ -65,7 +82,8 @@ with DAG(
         task_id="validate_silver",
         bash_command=project_command(
             f"{PYTHON_BIN} -m ai_decision_platform.processing.validate_silver "
-            f"--silver-dir {DATA_ROOT}/silver"
+            f"--silver-dir {DATA_ROOT}/silver "
+            '--expected-start "$BACKFILL_START" --expected-end "$BACKFILL_END"'
         ),
         env=COMMON_ENV,
     )
@@ -84,7 +102,8 @@ with DAG(
         task_id="validate_gold_gx",
         bash_command=project_command(
             f"{PYTHON_BIN} -m ai_decision_platform.quality.validate_gold_gx "
-            f"--gold-dir {DATA_ROOT}/gold"
+            f"--gold-dir {DATA_ROOT}/gold "
+            '--expected-start "$BACKFILL_START" --expected-end "$BACKFILL_END"'
         ),
         env=COMMON_ENV,
     )
@@ -110,6 +129,7 @@ with DAG(
 
     (
         sync_project
+        >> ingest_history
         >> bronze_to_silver
         >> validate_silver
         >> silver_to_gold

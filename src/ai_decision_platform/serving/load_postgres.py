@@ -44,24 +44,36 @@ def read_gold_features(spark: SparkSession, gold_dir: Path) -> pd.DataFrame:
 def write_postgres(frame: pd.DataFrame, database_url: str) -> None:
     engine = create_engine(database_url)
     with engine.begin() as connection:
-        connection.execute(text(f"DROP TABLE IF EXISTS {POSTGRES_SCHEMA}.{POSTGRES_TABLE}"))
+        connection.execute(
+            text(
+                f"""
+                CREATE TABLE IF NOT EXISTS {POSTGRES_SCHEMA}.{POSTGRES_TABLE} (
+                    timestamp_utc TIMESTAMP PRIMARY KEY,
+                    date_utc DATE NOT NULL,
+                    consumption_mw DOUBLE PRECISION NOT NULL,
+                    temperature_c DOUBLE PRECISION NOT NULL,
+                    hour INTEGER NOT NULL,
+                    month INTEGER NOT NULL,
+                    weekday_iso INTEGER NOT NULL,
+                    is_weekend BOOLEAN NOT NULL,
+                    is_public_holiday BOOLEAN NOT NULL
+                )
+                """
+            )
+        )
+        connection.execute(text(f"TRUNCATE TABLE {POSTGRES_SCHEMA}.{POSTGRES_TABLE}"))
+
     frame.to_sql(
         POSTGRES_TABLE,
         engine,
         schema=POSTGRES_SCHEMA,
-        if_exists="replace",
+        if_exists="append",
         index=False,
         method="multi",
+        chunksize=5000,
     )
+
     with engine.begin() as connection:
-        connection.execute(
-            text(
-                f"""
-                ALTER TABLE {POSTGRES_SCHEMA}.{POSTGRES_TABLE}
-                ADD PRIMARY KEY (timestamp_utc)
-                """
-            )
-        )
         connection.execute(
             text(
                 f"""
