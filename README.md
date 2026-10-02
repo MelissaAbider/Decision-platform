@@ -2,7 +2,7 @@
 
 AI Decision Platform is an end-to-end data engineering project built around electricity consumption, weather and calendar data. The goal is to reproduce a realistic company-style data pipeline: ingest raw data, transform it into analytical layers, validate data quality, orchestrate the workflow and publish a clean business table for downstream analytics or machine learning.
 
-This repository currently focuses on the data engineering foundation before the machine learning layer.
+The data engineering foundation is implemented, and the first data science cycle is complete: exploratory analysis, forecasting baselines, model comparison, error analysis, hyperparameter tuning and final model export.
 
 ## Project goals
 
@@ -18,6 +18,7 @@ The project is designed to practice the core tools and patterns used in modern d
 - Apache Airflow orchestration
 - Docker-based local services
 - Automated Python quality checks
+- One-hour-ahead electricity consumption forecasting
 
 ## Current pipeline
 
@@ -86,6 +87,8 @@ It combines electricity consumption, weather and calendar features into one tabl
 | Data quality | Great Expectations |
 | Serving database | PostgreSQL |
 | SQL modeling | dbt |
+| Exploratory analysis | JupyterLab, pandas, Matplotlib, Seaborn |
+| Machine learning | scikit-learn, XGBoost, joblib |
 | Streaming | Kafka, Open-Meteo live weather API |
 | Orchestration | Apache Airflow |
 | Local infrastructure | Docker Compose |
@@ -100,12 +103,15 @@ src/ai_decision_platform/
   processing/         Bronze -> Silver and Silver -> Gold transformations
   quality/            Great Expectations validation
   serving/            PostgreSQL loading
+  analysis/           Automated exploratory data analysis
+  training/           Baselines, model training, tuning and final model export
 
 airflow/dags/         Airflow DAG definition
 docker/airflow/       Custom Airflow Docker image
 sql/                  SQL validation queries
 scripts/              Local setup scripts
 tests/                Unit tests
+notebooks/            Data science framing and exploratory analysis
 ```
 
 Generated data, local environments, logs and secrets are intentionally excluded from Git.
@@ -278,11 +284,59 @@ ruff check: passed
 pytest: 17 passed
 ```
 
+## Data science: forecasting workflow
+
+The data science layer uses `analytics.mart_energy_hourly` from PostgreSQL to build a one-hour-ahead electricity consumption forecasting model. The workflow is intentionally split into clear scripts so each step can be reviewed independently:
+
+```text
+src/ai_decision_platform/analysis/eda_energy.py
+src/ai_decision_platform/training/baseline_forecast.py
+src/ai_decision_platform/training/train_regression.py
+src/ai_decision_platform/training/error_analysis.py
+src/ai_decision_platform/training/tune_hist_gradient_boosting.py
+src/ai_decision_platform/training/train_final_model.py
+```
+
+The final selected model is a tuned `HistGradientBoostingRegressor` trained on the chronological train + validation period and evaluated on the final untouched test period. Current final test metrics are:
+
+```text
+MAE: 500.9 MW
+RMSE: 701.9 MW
+MAPE: 0.95%
+```
+
+Run the full data science sequence from WSL after the PostgreSQL mart has been built:
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+export UV_PROJECT_ENVIRONMENT="$HOME/.venvs/ia-decision-datascience"
+export UV_LINK_MODE=copy
+export ADP_POSTGRES_URL='postgresql+psycopg://adp:adp@localhost:5432/adp'
+docker compose up -d postgres
+
+uv run --frozen --extra datascience python -m ai_decision_platform.analysis.eda_energy
+uv run --frozen --extra datascience python -m ai_decision_platform.training.baseline_forecast
+uv run --frozen --extra datascience python -m ai_decision_platform.training.train_regression
+uv run --frozen --extra datascience python -m ai_decision_platform.training.error_analysis
+uv run --frozen --extra datascience python -m ai_decision_platform.training.tune_hist_gradient_boosting
+uv run --frozen --extra datascience python -m ai_decision_platform.training.train_final_model
+```
+
+The final model artifact is generated locally under `models/energy_forecast/` and is intentionally not committed to Git. The next project step is experiment tracking and model management with MLflow.
+
+A notebook is also available for interactive exploration:
+
+```bash
+uv run --frozen --extra datascience jupyter lab --notebook-dir notebooks
+```
+
+Open `notebooks/01_energy_eda.ipynb`. Notebook outputs are intentionally kept lightweight for repository readability.
+
 ## Next steps
 
 Planned extensions:
 
-- add ML training and experiment tracking with MLflow
+- add experiment tracking and model management with MLflow
 - expose predictions through an API
 - build a dashboard for business users
 - add monitoring and alerting

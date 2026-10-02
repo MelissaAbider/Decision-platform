@@ -24,6 +24,17 @@ serving = [
 ]
 analytics = ["dbt-postgres>=1.9,<2"]
 streaming = ["kafka-python-ng>=2.2,<3", "psycopg[binary]>=3,<4"]
+datascience = [
+    "pandas>=2,<4",
+    "sqlalchemy>=2,<3",
+    "psycopg[binary]>=3,<4",
+    "matplotlib>=3.9,<4",
+    "seaborn>=0.13,<1",
+    "scikit-learn>=1.5,<2",
+    "xgboost>=2,<4",
+    "jupyterlab>=4,<5",
+    "ipykernel>=6,<8",
+]
 
 [project.scripts]
 ai-decision-platform = "ai_decision_platform.__main__:main"

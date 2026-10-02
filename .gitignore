@@ -52,4 +52,9 @@ Thumbs.db
 .vscode/
 .idea/
 
+# Local notebook state and generated analysis outputs
+.ipynb_checkpoints/
+reports/
+models/
+
 
