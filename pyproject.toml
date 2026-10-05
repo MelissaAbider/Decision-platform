@@ -24,6 +24,7 @@ serving = [
 ]
 analytics = ["dbt-postgres>=1.9,<2"]
 streaming = ["kafka-python-ng>=2.2,<3", "psycopg[binary]>=3,<4"]
+mlops = ["mlflow>=3,<4"]
 datascience = [
     "pandas>=2,<4",
     "sqlalchemy>=2,<3",

@@ -332,6 +332,37 @@ uv run --frozen --extra datascience jupyter lab --notebook-dir notebooks
 
 Open `notebooks/01_energy_eda.ipynb`. Notebook outputs are intentionally kept lightweight for repository readability.
 
+## MLOps: MLflow tracking and registry
+
+The first MLOps step logs the final forecasting model to MLflow using a dedicated PostgreSQL database named `mlflow` on the local PostgreSQL server. It records model parameters, final test metrics, documentation artifacts and the scikit-learn model itself. The model is registered as `energy_forecast_model` in the MLflow Model Registry.
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+export UV_PROJECT_ENVIRONMENT="$HOME/.venvs/ia-decision-mlops"
+export UV_LINK_MODE=copy
+
+docker compose up -d postgres
+docker compose exec -T postgres createdb -U adp mlflow || true
+
+uv run --frozen --extra mlops --extra datascience python -m ai_decision_platform.mlops.log_final_model \
+  --model-dir models/energy_forecast \
+  --experiment-name energy_forecasting \
+  --run-name final_hist_gradient_boosting \
+  --registered-model-name energy_forecast_model
+```
+
+Open the local MLflow UI:
+
+```bash
+uv run --frozen --extra mlops mlflow ui \
+  --backend-store-uri postgresql+psycopg://adp:adp@localhost:5432/mlflow \
+  --default-artifact-root .runtime/mlflow/artifacts \
+  --host 127.0.0.1 \
+  --port 5000
+```
+
+Then visit `http://127.0.0.1:5000`. Local MLflow runtime files are intentionally excluded from Git.
+
 ## Next steps
 
 Planned extensions:
